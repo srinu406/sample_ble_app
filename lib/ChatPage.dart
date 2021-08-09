@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:audioplayers/audio_cache.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:flutter_svprogresshud/flutter_svprogresshud.dart';
@@ -9,6 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:slide_popup_dialog/slide_popup_dialog.dart';
 import 'dart:io';
+import 'package:just_audio/just_audio.dart';
 
 import 'file_entity_list_tile.dart';
 import 'wav_header.dart';
@@ -38,13 +40,17 @@ class _ChatPage extends State<ChatPage> {
   bool resettimer = false;
   static final clientID = 0;
   BluetoothConnection connection;
-
+  AudioCache audioCache = AudioCache();
+  AudioPlayer advancedPlayer = AudioPlayer();
   //bool isConnected = true;
   bool isDisconnecting = false;
 
   List<List<int>> chunks = <List<int>>[];
+  List<List<int>> chunksave = <List<int>>[];
   int contentLength = 0;
+  int saveLength = 0;
   Uint8List _bytes;
+  Uint8List _bytes1;
 
   Timer _timer;
   RecordState _recordState = RecordState.stopped;
@@ -52,7 +58,9 @@ class _ChatPage extends State<ChatPage> {
 
   int recordingstop = 0;
   List<FileSystemEntity> files = List<FileSystemEntity>();
+  List<FileSystemEntity> prevfiles = List<FileSystemEntity>();
   String selectedFilePath;
+  final AudioPlayer _player = AudioPlayer();
   FileAudioPlayer player = FileAudioPlayer();
   bool recording = false;
 
@@ -67,7 +75,7 @@ class _ChatPage extends State<ChatPage> {
   bool get isConnected => connection != null && connection.isConnected;
 
   @override
-  void initState() {
+  Future<void> initState() {
     super.initState();
 
     _timer = Timer.periodic(Duration(seconds: 1), (timer) async {
@@ -77,6 +85,9 @@ class _ChatPage extends State<ChatPage> {
       resettimer = false;
     });
 
+    /*Timer.periodic(Duration(seconds: 1), (timer) async {
+      playByte();
+    });*/
     Timer.periodic(Duration(seconds: 10), (timer) {
       _listofFiles();
     });
@@ -122,6 +133,10 @@ class _ChatPage extends State<ChatPage> {
     super.dispose();
   }
 
+  int i = 0;
+  bool play = true;
+  bool startsent = false;
+  int recordstate = 0;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -137,12 +152,90 @@ class _ChatPage extends State<ChatPage> {
           child: isConnected
               ? Column(
                   children: <Widget>[
-                    shotButton(),
+                    Row(
+                      children: [
+                        Container(
+                          width: 50,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(25),
+                              color: play == true
+                                  ? Colors.yellow
+                                  : Color(0xFFF7b3c2),
+                            ),
+                            width: 100,
+                            height: 50,
+                            child: InkWell(
+                              onTap: () {
+                                setState(() {
+                                  if (play == true) {
+                                    play = false;
+                                    if (startsent == false)
+                                      _sendMessage("START");
+                                    recordstate = 1;
+                                    startsent = true;
+                                  } else {
+                                    play = true;
+                                    setState(() {
+                                      stopplay();
+                                      if (startsent == true)
+                                        _sendMessage("STOP");
+                                      startsent = false;
+                                      recordstate = 0;
+                                    });
+                                  }
+                                });
+                              },
+                              child: Icon(
+                                play == true ? Icons.play_arrow : Icons.cancel,
+                                color: play == true
+                                    ? Colors.lightGreen
+                                    : Colors.red,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Container(
+                          width: 20,
+                        ),
+                        play == false ? shotButton() : SizedBox(),
+                      ],
+                    ),
+                    Divider(
+                      height: 10,
+                    ),
+                    Container(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Center(
+                              child: Text("Previous recored files",
+                                  style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold))),
+                        ],
+                      ),
+                    ),
                     Expanded(
                       child: ListView(
                         children: files
                             .map((_file) => FileEntityListTile(
-                                  filePath: _file.path,
+                                  filePath: "Recording " +
+                                      files.indexOf(_file).toString() +
+                                      "\n" +
+                                      FileStat.statSync(_file.path)
+                                          .changed
+                                          .toString()
+                                          .substring(
+                                              0,
+                                              FileStat.statSync(_file.path)
+                                                  .changed
+                                                  .toString()
+                                                  .lastIndexOf("000")),
                                   fileSize: _file.statSync().size,
                                   onLongPress: () async {
                                     print("onLongPress item");
@@ -155,21 +248,23 @@ class _ChatPage extends State<ChatPage> {
                                     }
                                   },
                                   onTap: () async {
-                                    print("onTap item");
-                                    if (_file.path == selectedFilePath) {
-                                      await player.stop();
-                                      selectedFilePath = '';
-                                      return;
-                                    }
+                                    if (play == true) {
+                                      print("onTap item");
+                                      if (_file.path == selectedFilePath) {
+                                        await player.stop();
+                                        selectedFilePath = '';
+                                        return;
+                                      }
 
-                                    if (await File(_file.path).exists()) {
-                                      selectedFilePath = _file.path;
-                                      await player.start(_file.path);
-                                    } else {
-                                      selectedFilePath = '';
-                                    }
+                                      if (await File(_file.path).exists()) {
+                                        selectedFilePath = _file.path;
+                                        await player.start(_file.path);
+                                      } else {
+                                        selectedFilePath = '';
+                                      }
 
-                                    setState(() {});
+                                      setState(() {});
+                                    }
                                   },
                                 ))
                             .toList(),
@@ -189,18 +284,52 @@ class _ChatPage extends State<ChatPage> {
         ));
   }
 
+  stopplay() async {
+    await player.stop();
+  }
+
   int power_btn_tick = 0, reset = 1;
-  void _onDataReceived(Uint8List data) {
+  void _onDataReceived(Uint8List data) async {
+    if (startsent == false) return;
     // Allocate buffer for parsed data
     int backspacesCounter = 0;
+    chunksave.add(data);
+    saveLength += data.length;
 
     if (data != null && data.length > 0 && (recording == true)) {
-      chunks.add(data);
-      contentLength += data.length;
+      if (recordstate == 3) {
+        chunks.add(data);
+        contentLength += data.length;
+      }
       reset = 1;
       Fluttertoast.showToast(msg: "msg rec");
       resettimer = true;
     }
+  }
+
+  playByte() async {
+    try {
+      if (chunksave.length == 0 || saveLength == 0) return;
+
+      Fluttertoast.showToast(msg: "msg len $saveLength");
+      _bytes1 = Uint8List(saveLength);
+      int offset = 0;
+      for (final List<int> chunk in chunksave) {
+        _bytes1.setRange(offset, offset + chunk.length, chunk);
+        offset += chunk.length;
+      }
+
+      final path = await _localPath;
+      final file = File('$path/temp.wav');
+      var headerList = WavHeader.createWavHeader(saveLength);
+      file.writeAsBytesSync(headerList, mode: FileMode.write);
+      file.writeAsBytesSync(_bytes1, mode: FileMode.append);
+
+      player.start(file.path);
+
+      chunksave.clear();
+      saveLength = 0;
+    } catch (e) {}
   }
 
   _completeByte() async {
@@ -262,14 +391,11 @@ class _ChatPage extends State<ChatPage> {
             borderRadius: BorderRadius.circular(18),
             side: BorderSide(color: Colors.red)),
         onPressed: () {
-          if (recording == false) {
-            //  _sendMessage("START");
-            recording = true;
+          setState(() {
             _showRecordingDialog();
-          } else {
-            recording = false;
-            _sendMessage("STOP");
-          }
+            recording = true;
+            recordstate = 3;
+          });
         },
         color: Colors.red,
         textColor: Colors.white,
@@ -284,6 +410,10 @@ class _ChatPage extends State<ChatPage> {
     );
   }
 
+  String _selectedPosition = '1';
+  String _LorH = 'L';
+  List<String> _position = ['1', '2'];
+  List<String> _lung_Heart = ['L', 'H'];
   void _showRecordingDialog() {
     showSlideDialog(
         barrierDismissible: false,
@@ -292,6 +422,47 @@ class _ChatPage extends State<ChatPage> {
           crossAxisAlignment: CrossAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
+            Row(
+              children: [
+                Container(
+                  width: 300,
+                  child: DropdownButton(
+                    value: _LorH,
+                    iconSize: 50,
+                    isExpanded: false,
+                    items: _lung_Heart.map((String val) {
+                      return DropdownMenuItem<String>(
+                        value: val,
+                        child: new Text(val),
+                      );
+                    }).toList(),
+                    onChanged: (String newvalue) {
+                      setState(() {
+                        _LorH = newvalue;
+                      });
+                    },
+                  ),
+                ),
+                Container(
+                  child: DropdownButton(
+                    value: _selectedPosition,
+                    iconSize: 50,
+                    isExpanded: false,
+                    items: _position.map((String val) {
+                      return DropdownMenuItem<String>(
+                        value: val,
+                        child: new Text(val),
+                      );
+                    }).toList(),
+                    onChanged: (String newvalue) {
+                      setState(() {
+                        _selectedPosition = newvalue;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
             SizedBox(
               height: 50,
             ),
@@ -319,12 +490,13 @@ class _ChatPage extends State<ChatPage> {
                 side: BorderSide(color: Colors.red),
               ),
               onPressed: () {
-                _sendMessage("STOP");
-                //     SVProgressHUD.showInfo("Stopping...");
+                // _sendMessage("STOP");
+                //startsent = false;
+                SVProgressHUD.showInfo(status: "Stopping...");
                 Navigator.of(context).pop();
                 setState(() {
                   recording = false;
-                  recordingstop = 1;
+                  recordstate = 4;
                 });
               },
               color: Colors.red,
@@ -348,7 +520,8 @@ class _ChatPage extends State<ChatPage> {
 
   Future<File> get _makeNewFile async {
     final path = await _localPath;
-    String newFileName = dateFormat.format(DateTime.now());
+    String newFileName =
+        dateFormat.format(DateTime.now()) + _selectedPosition + _LorH;
     return File('$path/$newFileName.wav');
   }
 
@@ -357,18 +530,20 @@ class _ChatPage extends State<ChatPage> {
       int index = 0;
       final path = await _localPath;
       var fileList = Directory(path).list();
-      files.clear();
+      prevfiles.clear();
       index = 0;
       fileList.forEach((element) {
-        if (element.path.contains("wav")) {
-          files.insert(index, element);
+        if (element.path.contains("wav") && !(element.path.contains("temp"))) {
+          prevfiles.insert(index, element);
           index++;
 
           print("PATH: ${element.path} Size: ${element.statSync().size}");
         }
       });
 
-      setState(() {});
+      setState(() {
+        if (files != prevfiles) files = prevfiles;
+      });
     } catch (e) {}
   }
 }

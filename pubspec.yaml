@@ -36,6 +36,9 @@ dependencies:
   fileaudioplayer: ^1.0.0
   fluttertoast: ^7.1.0
   flutter_bluetooth_serial: ^0.2.2
+  audioplayers: ^0.17.4
+  just_audio: ^0.6.15
+  flutter_slidable: ^0.5.7
   
 dev_dependencies:
   flutter_test:
@@ -52,6 +55,10 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  assets:
+    - assets/images/lung.png
+    - assets/images/heart.png
+  
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

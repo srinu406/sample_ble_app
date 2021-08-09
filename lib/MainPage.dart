@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:Bluetooth_stethoscope/BluetoothDeviceListEntry.dart';
+import 'package:Bluetooth_stethoscope/slidable_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:fluttertoast/fluttertoast.dart';
@@ -13,7 +15,7 @@ import './BackgroundCollectingTask.dart';
 import './BackgroundCollectedPage.dart';
 import 'file_entity_list_tile.dart';
 import 'package:fileaudioplayer/fileaudioplayer.dart';
-
+import 'recordings.dart';
 // import './helpers/LineChart.dart';
 
 class MainPage extends StatefulWidget {
@@ -21,7 +23,23 @@ class MainPage extends StatefulWidget {
   _MainPage createState() => new _MainPage();
 }
 
+enum _DeviceAvailability {
+  no,
+  maybe,
+  yes,
+}
+
+class _DeviceWithAvailability extends BluetoothDevice {
+  BluetoothDevice device;
+  _DeviceAvailability availability;
+  int rssi;
+
+  _DeviceWithAvailability(this.device, this.availability, [this.rssi]);
+}
+
 class _MainPage extends State<MainPage> {
+  StreamSubscription<BluetoothDiscoveryResult> _discoveryStreamSubscription;
+  List<_DeviceWithAvailability> devices = List<_DeviceWithAvailability>();
   FileAudioPlayer player = FileAudioPlayer();
   String selectedFilePath;
   List<FileSystemEntity> files = List<FileSystemEntity>();
@@ -36,11 +54,31 @@ class _MainPage extends State<MainPage> {
   BackgroundCollectingTask _collectingTask;
 
   bool _autoAcceptPairingRequests = false;
+  bool _isDiscovering;
 
   @override
   void initState() {
     super.initState();
 
+    _isDiscovering = true;
+
+    if (_isDiscovering) {
+      _startDiscovery();
+    }
+    FlutterBluetoothSerial.instance
+        .getBondedDevices()
+        .then((List<BluetoothDevice> bondedDevices) {
+      setState(() {
+        devices = bondedDevices
+            .map(
+              (device) => _DeviceWithAvailability(
+                device,
+                _DeviceAvailability.yes,
+              ),
+            )
+            .toList();
+      });
+    });
     // Get current state
     FlutterBluetoothSerial.instance.state.then((state) {
       setState(() {
@@ -84,8 +122,26 @@ class _MainPage extends State<MainPage> {
     });
   }
 
-  void _callback() {
-    Fluttertoast.showToast(msg: "hello");
+  void _startDiscovery() {
+    _discoveryStreamSubscription =
+        FlutterBluetoothSerial.instance.startDiscovery().listen((r) {
+      setState(() {
+        Iterator i = devices.iterator;
+        while (i.moveNext()) {
+          var _device = i.current;
+          if (_device.device == r.device) {
+            _device.availability = _DeviceAvailability.yes;
+            _device.rssi = r.rssi;
+          }
+        }
+      });
+    });
+
+    _discoveryStreamSubscription.onDone(() {
+      setState(() {
+        _isDiscovering = false;
+      });
+    });
   }
 
   Future<String> get _localPath async {
@@ -97,6 +153,8 @@ class _MainPage extends State<MainPage> {
 
   @override
   void dispose() {
+    _discoveryStreamSubscription?.cancel();
+
     FlutterBluetoothSerial.instance.setPairingRequestHandler(null);
     _collectingTask?.dispose();
     _discoverableTimeoutTimer?.cancel();
@@ -106,15 +164,24 @@ class _MainPage extends State<MainPage> {
   bool state = false;
   @override
   Widget build(BuildContext context) {
+    List<BluetoothDeviceListEntry> list = devices
+        .map((_device) => BluetoothDeviceListEntry(
+              device: _device.device,
+              rssi: _device.rssi,
+              enabled: _device.availability == _DeviceAvailability.yes,
+              onTap: () {
+                _startChat(context, _device.device);
+              },
+            ))
+        .toList();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Flutter Bluetooth Serial'),
+        title: const Text('Remote Steth'),
       ),
       body: Container(
-        child: ListView(
+        child: Column(
           children: <Widget>[
             Divider(),
-            ListTile(title: const Text('General')),
             SwitchListTile(
               title: const Text('Enable Bluetooth'),
               value: _bluetoothState.isEnabled,
@@ -134,6 +201,23 @@ class _MainPage extends State<MainPage> {
               },
             ),
             ListTile(
+              title: const Text('Previous Files'),
+              subtitle: Text("Recording Files on this device"),
+              trailing: RaisedButton(
+                child: const Text('Open'),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) {
+                        //return RecordingPage();
+                        return SlidableScreen();
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
+            ListTile(
               title: const Text('Bluetooth status'),
               subtitle: Text(_bluetoothState.toString()),
               trailing: RaisedButton(
@@ -144,7 +228,7 @@ class _MainPage extends State<MainPage> {
               ),
             ),
             Divider(),
-            ListTile(
+            /* ListTile(
               title: RaisedButton(
                 child: const Text('Connect to paired device'),
                 onPressed: () async {
@@ -165,11 +249,22 @@ class _MainPage extends State<MainPage> {
                   }
                 },
               ),
+            ),*/
+            Expanded(
+              child: ListView(children: list),
             ),
+
+            //  list != null ? ListView(children: list) : Divider(),
           ],
         ),
       ),
     );
+  }
+
+  void _startCameraConnect(BuildContext context, BluetoothDevice server) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (context) {
+      return ChatPage(server: server);
+    }));
   }
 
   void _startChat(BuildContext context, BluetoothDevice server) {
